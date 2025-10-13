@@ -16,7 +16,7 @@
     color: #333;
     margin: 0;
     padding: 20px;
-    -webkit-tap-highlight-color: transparent; /* 移除行動裝置點擊高亮 */
+    -webkit-tap-highlight-color: transparent;
   }
   h1 {
     color: #333;
@@ -28,15 +28,15 @@
     width: 100%;
     max-width: 480px;
     aspect-ratio: 2 / 3;
-    border-radius: 15px; /* 圓角更明顯 */
+    border-radius: 15px;
     overflow: hidden;
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    background-color: #000; /* 預設背景 */
+    background-color: #000;
   }
   #camera-preview {
     width: 100%;
     height: 100%;
-    object-fit: cover; /* 關鍵：讓預覽畫面填滿容器且不變形 */
+    object-fit: cover;
   }
   #frame {
     position: absolute;
@@ -78,7 +78,7 @@
     transition: background-color 0.3s, transform 0.1s;
   }
   .button-group button:active {
-      transform: scale(0.95); /* 增加點擊回饋 */
+      transform: scale(0.95);
   }
   #switch-camera-button { background-color: #6c757d; }
   #switch-camera-button:hover { background-color: #5a6268; }
@@ -89,26 +89,24 @@
   #retake-button { background-color: #007bff; }
   #retake-button:hover { background-color: #0056b3; }
   #preview-container {
-    display: none; /* 初始隱藏 */
+    display: none;
     flex-direction: column;
     align-items: center;
   }
   #preview-image {
     width: 100%;
     height: 100%;
-    object-fit: cover; /* 讓預覽圖也保持比例 */
+    object-fit: cover;
   }
 </style>
 </head>
 <body>
   <h1>拍照＋上傳＋填問卷，才能換點數喔！</h1>
-  <!-- 即時相機畫面 -->
   <div id="camera-container" style="display: flex; flex-direction: column; align-items: center;">
     <div class="container">
-      <video id="camera-preview" autoplay playsinline muted></video> <!-- 加上 muted 避免潛在的自動播放問題 -->
+      <video id="camera-preview" autoplay playsinline muted></video>
       <img id="frame" src="/frame.png" alt="邊框" crossorigin="anonymous">
       <img id="dynamic-logo" src="/logo.png" alt="Logo" crossorigin="anonymous">
-      <!-- Canvas 不再需要固定尺寸，由 JS 動態設定 -->
       <canvas id="canvas" style="display:none;"></canvas>
     </div>
     <div class="button-group">
@@ -123,7 +121,6 @@
     </div>
   </div>
 
-  <!-- 拍照後的預覽畫面 -->
   <div id="preview-container">
     <div class="container">
       <img id="preview-image" src="" alt="拍照預覽">
@@ -135,7 +132,6 @@
   </div>
 
   <script>
-    // ===== 1. 元素獲取 (保持不變) =====
     const cameraPreview = document.getElementById('camera-preview');
     const frameImage = document.getElementById('frame');
     const captureButton = document.getElementById('capture-button');
@@ -151,7 +147,6 @@
     const switchCameraButton = document.getElementById('switch-camera-button');
     const dynamicLogo = document.getElementById('dynamic-logo');
 
-    // ===== 2. 狀態變數與資源預載入 (保持不變) =====
     const logoImage = new Image();
     logoImage.src = '/logo.png';
     logoImage.crossOrigin = 'anonymous';
@@ -161,8 +156,6 @@
     let faceModelsLoaded = false;
     let faceDetectionInterval;
     let lastLogoPosition = null;
-
-    // ===== 3. 核心功能函式 (重構與優化) =====
 
     async function loadFaceApiModels() {
       const MODEL_URL = '/weights';
@@ -181,7 +174,6 @@
         currentStream.getTracks().forEach(track => track.stop());
       }
       try {
-        // 請求高解析度影像，讓瀏覽器自己選擇最佳的
         const constraints = {
           video: {
             width: { ideal: 1920 },
@@ -219,34 +211,27 @@
         if (detections.length > 0) {
           const face = detections[0].box;
           
-          // ===== 關鍵修改：所有計算都基於 Video 的原生尺寸 =====
           const videoWidth = cameraPreview.videoWidth;
           const videoHeight = cameraPreview.videoHeight;
           const viewWidth = cameraPreview.offsetWidth;
           const viewHeight = cameraPreview.offsetHeight;
 
-          // 計算影像串流與預覽畫面的縮放比例
           const scaleX = viewWidth / videoWidth;
           const scaleY = viewHeight / videoHeight;
-          // 由於 object-fit: cover，我們取較大的縮放比例
           const scale = Math.max(scaleX, scaleY);
 
-          // 計算畫面置中後的偏移量
           const offsetX = (viewWidth - videoWidth * scale) / 2;
           const offsetY = (viewHeight - videoHeight * scale) / 2;
 
-          // 將偵測到的人臉座標轉換為預覽畫面上的座標
           const viewFaceX = face.x * scale + offsetX;
           const viewFaceY = face.y * scale + offsetY;
           const viewFaceWidth = face.width * scale;
 
-          // 計算 Logo 在預覽畫面上的位置和大小
           const logoWidth = viewFaceWidth * 0.5;
           const logoHeight = logoImage.naturalHeight * (logoWidth / logoImage.naturalWidth);
           let logoX = viewFaceX + (viewFaceWidth / 2) - (logoWidth / 2) - 80;
           let logoY = viewFaceY - logoHeight - 30;
 
-          // 確保 Logo 在預覽畫面內
           logoX = Math.max(0, Math.min(viewWidth - logoWidth, logoX));
           logoY = Math.max(0, Math.min(viewHeight - logoHeight, logoY));
 
@@ -256,7 +241,6 @@
           dynamicLogo.style.height = `${logoHeight}px`;
           dynamicLogo.style.display = 'block';
 
-          // 儲存 Logo 相對於 *原始影像* 的位置，供 Canvas 使用
           lastLogoPosition = {
             x: (logoX - offsetX) / scale,
             y: (logoY - offsetY) / scale,
@@ -267,7 +251,7 @@
           dynamicLogo.style.display = 'none';
           lastLogoPosition = null;
         }
-      }, 200); // 降低偵測頻率以節省效能
+      }, 200);
     }
 
     function stopFaceDetection() {
@@ -284,107 +268,125 @@
       
       stopFaceDetection();
 
-      // 1. 獲取影像和容器的尺寸與比例
+      // --- 關鍵步驟：在拍照當下，重新獲取最準確的尺寸 ---
       const videoWidth = cameraPreview.videoWidth;
       const videoHeight = cameraPreview.videoHeight;
       const containerWidth = cameraPreview.offsetWidth;
       const containerHeight = cameraPreview.offsetHeight;
-      const containerAspect = containerWidth / containerHeight;
-      const videoAspect = videoWidth / videoHeight;
 
-      // 2. 計算裁切區域 (Source) 和繪製尺寸 (Destination)
-      let sx = 0, sy = 0, sWidth = videoWidth, sHeight = videoHeight;
+      // 1. 計算裁切參數
+      // 這個函式封裝了 object-fit: cover 的裁切邏輯
+      const { sx, sy, sWidth, sHeight } = calculateCoverCrop(videoWidth, videoHeight, containerWidth, containerHeight);
 
-      // 這是實現 object-fit: cover 的核心邏輯
-      // 如果容器比影像更「瘦高」，則左右裁切影像
-      if (containerAspect < videoAspect) {
-        sWidth = videoHeight * containerAspect;
-        sx = (videoWidth - sWidth) / 2;
-      } 
-      // 如果容器比影像更「矮胖」，則上下裁切影像
-      else if (containerAspect > videoAspect) {
-        sHeight = videoWidth / containerAspect;
-        sy = (videoHeight - sHeight) / 2;
-      }
-
-      // 3. 設定 Canvas 尺寸以匹配最終輸出比例，並獲取高畫質
-      // 我們可以設定一個理想的輸出寬度，例如 1080px
-      const outputWidth = 1080;
-      const outputHeight = outputWidth / containerAspect;
+      // 2. 設定 Canvas 尺寸以匹配最終輸出比例，並獲取高畫質
+      const outputWidth = 1080; // 設定一個理想的輸出寬度
+      const outputHeight = outputWidth * (containerHeight / containerWidth); // 根據容器比例計算高度
       canvas.width = outputWidth;
       canvas.height = outputHeight;
 
-      // 4. 繪製影像
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      // 如果是前鏡頭，先設定水平翻轉
-      if (currentFacingMode === 'user') {
-        ctx.save();
-        ctx.scale(-1, 1);
-        ctx.translate(-canvas.width, 0);
-      }
+      // 3. 繪製主畫面 (包含裁切和翻轉)
+      drawFlippedAndCroppedVideo(ctx, cameraPreview, sx, sy, sWidth, sHeight);
 
-      // 將裁切後的影像部分繪製到整個 Canvas 上
-      ctx.drawImage(cameraPreview, sx, sy, sWidth, sHeight, 0, 0, canvas.width, canvas.height);
-
-      if (currentFacingMode === 'user') {
-        ctx.restore(); // 恢復翻轉狀態，後續繪製不受影響
-      }
-
-      // 5. 繪製附加元素（美肌、邊框、Logo）
+      // 4. 繪製附加元素
       if (beautifyCheckbox.checked) {
-        applyBeautifyFilter(ctx, canvas.width, canvas.height);
+        applyBeautifyFilter(ctx);
       }
       
-      // 繪製邊框
       ctx.drawImage(frameImage, 0, 0, canvas.width, canvas.height);
 
-      // 繪製 Logo
       if (addLogoCheckbox.checked && logoImage.complete && lastLogoPosition) {
-        // 計算 Logo 在新 Canvas 上的繪製位置
-        const drawScale = canvas.width / sWidth;
-        const logoDrawX = (lastLogoPosition.x - sx) * drawScale;
-        const logoDrawY = (lastLogoPosition.y - sy) * drawScale;
-        const logoDrawWidth = lastLogoPosition.width * drawScale;
-        const logoDrawHeight = lastLogoPosition.height * drawScale;
-        
-        // 如果是前鏡頭，Logo 的 X 座標也需要翻轉
-        if (currentFacingMode === 'user') {
-            const finalLogoX = canvas.width - logoDrawX - logoDrawWidth;
-            ctx.drawImage(logoImage, finalLogoX, logoDrawY, logoDrawWidth, logoDrawHeight);
-        } else {
-            ctx.drawImage(logoImage, logoDrawX, logoDrawY, logoDrawWidth, logoDrawHeight);
-        }
+        drawLogoOnCanvas(ctx, logoImage, lastLogoPosition, { sx, sy, sWidth });
       }
 
-      // 6. 顯示結果
-      previewImage.src = canvas.toDataURL('image/jpeg', 0.9); // 使用 JPEG 格式以節省空間
+      // 5. 顯示結果
+      previewImage.src = canvas.toDataURL('image/jpeg', 0.9);
       cameraContainer.style.display = 'none';
       previewContainer.style.display = 'flex';
     }
 
-    // 簡單的美肌濾鏡 (保持不變)
-    function applyBeautifyFilter(ctx, width, height) {
+    // ===== 新增的輔助函式，讓邏輯更清晰 =====
+
+    /**
+     * 計算模擬 object-fit: cover 效果所需的裁切參數
+     * @returns {object} { sx, sy, sWidth, sHeight }
+     */
+    function calculateCoverCrop(srcWidth, srcHeight, containerWidth, containerHeight) {
+      const srcAspect = srcWidth / srcHeight;
+      const containerAspect = containerWidth / containerHeight;
+      let sx = 0, sy = 0, sWidth = srcWidth, sHeight = srcHeight;
+
+      if (containerAspect < srcAspect) { // 容器比影像更「瘦高」，左右裁切
+        sWidth = srcHeight * containerAspect;
+        sx = (srcWidth - sWidth) / 2;
+      } else if (containerAspect > srcAspect) { // 容器比影像更「矮胖」，上下裁切
+        sHeight = srcWidth / containerAspect;
+        sy = (srcHeight - sHeight) / 2;
+      }
+      return { sx, sy, sWidth, sHeight };
+    }
+
+    /**
+     * 繪製經過裁切和（根據需要）水平翻轉的影像
+     */
+    function drawFlippedAndCroppedVideo(context, video, sx, sy, sWidth, sHeight) {
+      context.clearRect(0, 0, context.canvas.width, context.canvas.height);
+      
+      if (currentFacingMode === 'user') {
+        context.save();
+        context.scale(-1, 1);
+        context.translate(-context.canvas.width, 0);
+      }
+
+      context.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, context.canvas.width, context.canvas.height);
+
+      if (currentFacingMode === 'user') {
+        context.restore();
+      }
+    }
+
+    /**
+     * 在 Canvas 上繪製 Logo
+     */
+    function drawLogoOnCanvas(context, logo, logoPos, cropInfo) {
+      const { sx, sWidth } = cropInfo;
+      const drawScale = context.canvas.width / sWidth;
+      
+      const logoDrawX = (logoPos.x - sx) * drawScale;
+      const logoDrawY = (logoPos.y - cropInfo.sy) * drawScale;
+      const logoDrawWidth = logoPos.width * drawScale;
+      const logoDrawHeight = logoPos.height * drawScale;
+      
+      if (currentFacingMode === 'user') {
+        const finalLogoX = context.canvas.width - logoDrawX - logoDrawWidth;
+        context.drawImage(logo, finalLogoX, logoDrawY, logoDrawWidth, logoDrawHeight);
+      } else {
+        context.drawImage(logo, logoDrawX, logoDrawY, logoDrawWidth, logoDrawHeight);
+      }
+    }
+
+    /**
+     * 套用美肌濾鏡
+     */
+    function applyBeautifyFilter(context) {
+        const { width, height } = context.canvas;
         const tempCanvas = document.createElement('canvas');
         const tempCtx = tempCanvas.getContext('2d');
         tempCanvas.width = width;
         tempCanvas.height = height;
-        tempCtx.drawImage(canvas, 0, 0);
+        tempCtx.drawImage(context.canvas, 0, 0);
 
-        ctx.filter = 'brightness(1.05) contrast(1.05) saturate(1.1)';
-        ctx.drawImage(tempCanvas, 0, 0);
-        ctx.filter = 'none';
+        context.filter = 'brightness(1.05) contrast(1.05) saturate(1.1)';
+        context.drawImage(tempCanvas, 0, 0);
+        context.filter = 'none';
     }
 
-    // ===== 4. 事件處理函式 (部分修改) =====
+    // ===== 事件處理與初始化函式 (保持不變) =====
 
     function savePicture() {
-      // 這裡可以替換成上傳到伺服器的邏輯
       const imageDataURL = previewImage.src;
       console.log('準備上傳圖片，Base64 資料長度:', imageDataURL.length);
       alert('圖片已儲存（請查看主控台）。實際應用中，這裡會是上傳邏輯。');
       
-      // 模擬下載
       const downloadLink = document.createElement('a');
       downloadLink.href = imageDataURL;
       downloadLink.download = `selfie-${Date.now()}.jpg`;
@@ -405,7 +407,6 @@
       startCamera(currentFacingMode);
     }
 
-    // ===== 5. 事件綁定與初始化 (保持不變) =====
     captureButton.addEventListener('click', takePicture);
     saveButton.addEventListener('click', savePicture);
     retakeButton.addEventListener('click', retakePicture);
@@ -417,7 +418,6 @@
       }
     });
 
-    // 初始啟動相機
     startCamera(currentFacingMode);
   </script>
 </body>
