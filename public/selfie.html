@@ -155,8 +155,6 @@
     let currentFacingMode = 'user';
     let faceModelsLoaded = false;
     let faceDetectionInterval;
-    // 不再需要 lastLogoPosition，因為我們將在拍照時直接測量
-    // let lastLogoPosition = null; 
 
     async function loadFaceApiModels() {
       const MODEL_URL = '/weights';
@@ -197,7 +195,6 @@
       }
     }
 
-    // 這個函式現在只負責在螢幕上顯示動態 Logo，不再儲存任何座標
     function startFaceDetection() {
       if (faceDetectionInterval) clearInterval(faceDetectionInterval);
       
@@ -251,6 +248,16 @@
         return;
       }
       
+      // ===== 關鍵步驟 1：在停止偵測前，先測量 Logo 的位置 =====
+      let logoRect = null;
+      let previewRect = null;
+      const logoStyle = window.getComputedStyle(dynamicLogo);
+      if (addLogoCheckbox.checked && logoStyle.display !== 'none') {
+        logoRect = dynamicLogo.getBoundingClientRect();
+        previewRect = cameraPreview.getBoundingClientRect();
+      }
+
+      // ===== 關鍵步驟 2：現在才停止偵測並隱藏 Logo =====
       stopFaceDetection();
 
       const videoWidth = cameraPreview.videoWidth;
@@ -273,13 +280,9 @@
       
       ctx.drawImage(frameImage, 0, 0, canvas.width, canvas.height);
 
-      // ===== 關鍵步驟：在拍照後，直接測量螢幕上的 Logo 位置 =====
-      if (addLogoCheckbox.checked && logoImage.complete) {
-        // 檢查 dynamicLogo 是否可見
-        const logoStyle = window.getComputedStyle(dynamicLogo);
-        if (logoStyle.display !== 'none') {
-          drawLogoOnCanvas(ctx, logoImage);
-        }
+      // ===== 關鍵步驟 3：如果測量到了位置，就繪製 Logo =====
+      if (logoRect && previewRect) {
+        drawLogoOnCanvas(ctx, logoImage, logoRect, previewRect);
       }
 
       previewImage.src = canvas.toDataURL('image/jpeg', 0.9);
@@ -313,28 +316,23 @@
         context.restore();
       }
     }
-
-    // ===== 核心修改：drawLogoOnCanvas 的全新邏輯 =====
-    function drawLogoOnCanvas(context, logo) {
-      // 1. 直接從 DOM 獲取 Logo 在螢幕上的視覺尺寸和位置
-      const logoRect = dynamicLogo.getBoundingClientRect();
-      const previewRect = cameraPreview.getBoundingClientRect();
-
-      // 2. 計算 Logo 相對於預覽框的「百分比」位置和尺寸
+    
+    // ===== 核心修改：drawLogoOnCanvas 的參數和邏輯更新 =====
+    function drawLogoOnCanvas(context, logo, logoRect, previewRect) {
+      // 1. 計算 Logo 相對於預覽框的「百分比」位置和尺寸
       const relativeX = (logoRect.left - previewRect.left) / previewRect.width;
       const relativeY = (logoRect.top - previewRect.top) / previewRect.height;
       const relativeWidth = logoRect.width / previewRect.width;
       const relativeHeight = logoRect.height / previewRect.height;
 
-      // 3. 將這些百分比應用到最終的 Canvas 上
+      // 2. 將這些百分比應用到最終的 Canvas 上
       const logoDrawX = context.canvas.width * relativeX;
       const logoDrawY = context.canvas.height * relativeY;
       const logoDrawWidth = context.canvas.width * relativeWidth;
       const logoDrawHeight = context.canvas.height * relativeHeight;
       
-      // 4. 繪製 Logo（並處理前鏡頭翻轉）
+      // 3. 繪製 Logo（並處理前鏡頭翻轉）
       if (currentFacingMode === 'user') {
-        // 如果是前鏡頭，整個畫布是翻轉的，所以 Logo 的 X 座標也要翻轉
         const finalFlippedLogoX = context.canvas.width - logoDrawX - logoDrawWidth;
         context.drawImage(logo, finalFlippedLogoX, logoDrawY, logoDrawWidth, logoDrawHeight);
       } else {
