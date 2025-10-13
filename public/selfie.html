@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>自拍相機 (Node.js Server)</title>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    background-color: #f0f2f5;
+    color: #333;
+    margin: 0;
+    padding: 20px;
+  }
+  h1 {
+    color: #333;
+  }
+  .container {
+    position: relative;
+    width: 100%;
+    max-width: 480px;
+    aspect-ratio: 2 / 3;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  }
+  #camera-preview {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  #frame {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 2; /* 確保邊框在最上層 */
+  }
+  #dynamic-logo {
+    position: absolute;
+    display: none; /* 預設隱藏 */
+    z-index: 1; /* 在邊框下方，在影片上方 */
+    object-fit: contain; /* 確保 Logo 完整顯示 */
+    pointer-events: none; /* 不阻擋點擊事件 */
+  }
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+  .button-group {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .button-group button {
+    padding: 12px 24px;
+    font-size: 18px;
+    font-weight: bold;
+    color: white;
+    border: none;
+    border-radius: 50px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+  }
+  #switch-camera-button {
+    background-color: #6c757d;
+  }
+  #switch-camera-button:hover {
+    background-color: #5a6268;
+  }
+  #capture-button {
+    background-color: #dc3545;
+  }
+  #capture-button:hover {
+    background-color: #c82333;
+  }
+  #save-button {
+    background-color: #28a745;
+  }
+  #save-button:hover {
+    background-color: #218838;
+  }
+  #retake-button {
+    background-color: #007bff;
+  }
+  #retake-button:hover {
+    background-color: #0056b3;
+  }
+  #preview-container {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+  }
+  #preview-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+</style>
+</head>
+<body>
+  <h1>拍照＋上傳＋填問卷，才能換點數喔！</h1>
+  <!-- 即時相機畫面 -->
+  <div id="camera-container" style="display: flex; flex-direction: column; align-items: center;">
+    <div class="container">
+      <video id="camera-preview" autoplay playsinline></video>
+      <img id="frame" src="/frame.png" alt="邊框" crossorigin="anonymous">
+      <img id="dynamic-logo" src="/logo.png" alt="Logo" crossorigin="anonymous">
+      <canvas id="canvas" width="480" height="720" style="display:none;"></canvas>
+    </div>
+    <div class="button-group">
+      <div class="controls">
+        <input type="checkbox" id="add-logo-checkbox">
+        <label for="add-logo-checkbox">加入 Logo</label>
+        <input type="checkbox" id="beautify-checkbox">
+        <label for="beautify-checkbox">美肌模式</label>
+      </div>
+      <button id="switch-camera-button">切換鏡頭</button>
+      <button id="capture-button">拍照</button>
+    </div>
+  </div>
+
+  <!-- 拍照後的預覽畫面 -->
+  <div id="preview-container">
+    <div class="container">
+      <img id="preview-image" src="" alt="拍照預覽">
+    </div>
+    <div class="button-group">
+      <button id="save-button">儲存</button>
+      <button id="retake-button">重拍</button>
+    </div>
+  </div>
+
+  <script>
+    const cameraPreview = document.getElementById('camera-preview');
+    const frameImage = document.getElementById('frame');
+    const captureButton = document.getElementById('capture-button');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    const cameraContainer = document.getElementById('camera-container');
+    const previewContainer = document.getElementById('preview-container');
+    const previewImage = document.getElementById('preview-image');
+    const saveButton = document.getElementById('save-button');
+    const retakeButton = document.getElementById('retake-button');
+
+    const addLogoCheckbox = document.getElementById('add-logo-checkbox');
+    const beautifyCheckbox = document.getElementById('beautify-checkbox');
+    const switchCameraButton = document.getElementById('switch-camera-button');
+    const dynamicLogo = document.getElementById('dynamic-logo');
+
+    // 預先載入 Logo 圖片
+    const logoImage = new Image();
+    logoImage.src = '/logo.png'; // 請確保您的 public 資料夾中有 logo.png
+    logoImage.crossOrigin = 'anonymous';
+
+    let currentStream;
+    let currentFacingMode = 'user'; // 'user' 代表前鏡頭, 'environment' 代表後鏡頭
+    let faceModelsLoaded = false;
+    let faceDetectionInterval;
+    let lastLogoPosition = null; // 儲存最後偵測到的 Logo 位置和大小
+
+    // 載入 face-api.js 模型
+    async function loadFaceApiModels() {
+      const MODEL_URL = '/weights'; // 確保 weights 資料夾在 public/ 下
+      try {
+        await faceapi.nets.tinyFaceDetector.load(MODEL_URL);
+        faceModelsLoaded = true;
+        console.log('Face API models loaded.');
+      } catch (e) {
+        console.error("載入人臉偵測模型失敗。請確認 'public/weights' 資料夾是否存在且包含模型檔案。", e);
+        alert("載入人臉偵測模型失敗，Logo 追蹤功能將無法使用。");
+      }
+    }
+
+    async function startCamera(facingMode) {
+      // 停止任何現有的串流以釋放相機
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => {
+          track.stop();
+        });
+      }
+
+      try {
+        const constraints = {
+          video: {
+            width: { ideal: 480 }, // 設置理想寬度
+            height: { ideal: 720 }, // 設置理想高度
+            facingMode: facingMode
+          }
+        };
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        currentStream = stream;
+        cameraPreview.srcObject = stream;
+        await new Promise(resolve => cameraPreview.onloadedmetadata = resolve);
+        
+        // 如果是前鏡頭，則鏡像反轉畫面
+        cameraPreview.style.transform = (facingMode === 'user') ? 'scaleX(-1)' : 'scaleX(1)';
+
+        // 啟動人臉偵測
+        if (faceModelsLoaded) {
+          startFaceDetection();
+        } else {
+          // 如果模型尚未載入，則先載入再啟動偵測
+          await loadFaceApiModels();
+          if (faceModelsLoaded) {
+            startFaceDetection();
+          }
+        }
+
+      } catch (error) {
+        console.error('無法取得相機存取權:', error);
+        alert(`無法啟動相機 (${facingMode})。可能是您的裝置不支援或未授權。`);
+      }
+    }
+
+    function startFaceDetection() {
+      if (faceDetectionInterval) {
+        clearInterval(faceDetectionInterval);
+      }
+      faceDetectionInterval = setInterval(async () => {
+        if (!faceModelsLoaded || !cameraPreview.srcObject) {
+          return;
+        }
+
+        const detections = await faceapi.detectAllFaces(cameraPreview, new faceapi.TinyFaceDetectorOptions());
+        
+        if (detections.length > 0 && addLogoCheckbox.checked) {
+          // 選擇第一個偵測到的人臉
+          const face = detections[0];
+          const box = face.box;
+
+          // 計算 Logo 的位置和大小
+          const logoWidth = box.width * 0.5; // Logo 寬度為人臉寬度的一半
+          const logoHeight = logoImage.naturalHeight * (logoWidth / logoImage.naturalWidth); // 保持 Logo 比例
+          
+          // 放置在人臉上方向左偏移 80 像素，並向上偏移 30 像素
+          let logoX = box.x + (box.width / 2) - (logoWidth / 2) - 80;
+          let logoY = box.y - logoHeight - 30; 
+
+          // 確保 Logo 不會超出畫面邊界
+          logoX = Math.max(0, Math.min(cameraPreview.offsetWidth - logoWidth, logoX));
+          logoY = Math.max(0, Math.min(cameraPreview.offsetHeight - logoHeight, logoY));
+
+          dynamicLogo.style.left = `${logoX}px`;
+          dynamicLogo.style.top = `${logoY}px`;
+          dynamicLogo.style.width = `${logoWidth}px`;
+          dynamicLogo.style.height = `${logoHeight}px`;
+          dynamicLogo.style.display = 'block';
+
+          // 儲存 Logo 的最終位置和大小，用於 Canvas 繪製
+          lastLogoPosition = { x: logoX, y: logoY, width: logoWidth, height: logoHeight };
+
+        } else {
+          dynamicLogo.style.display = 'none';
+          lastLogoPosition = null;
+        }
+      }, 100); // 每 100 毫秒偵測一次
+    }
+
+    function stopFaceDetection() {
+      if (faceDetectionInterval) {
+        clearInterval(faceDetectionInterval);
+        faceDetectionInterval = null;
+      }
+      dynamicLogo.style.display = 'none'; // 停止偵測時隱藏 Logo
+    }
+
+    // 簡單的美肌濾鏡
+    function applyBeautifyFilter(ctx, width, height) {
+      // 增加亮度和對比度
+      ctx.filter = 'brightness(1.1) contrast(1.1)';
+      ctx.drawImage(canvas, 0, 0, width, height); // 將自身繪製回來以套用濾鏡
+      ctx.filter = 'none'; // 重置濾鏡
+
+      // 輕微模糊以平滑皮膚
+      ctx.filter = 'blur(0.5px)';
+      ctx.drawImage(canvas, 0, 0, width, height);
+      ctx.filter = 'none';
+    }
+
+    function takePicture() {
+      if (!cameraPreview.srcObject || !frameImage.complete) {
+          alert('相機或邊框尚未準備好，請稍候再試。');
+          return;
+      }
+      
+      stopFaceDetection(); // 拍照時停止人臉偵測
+
+      // 清空 Canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // 如果使用前鏡頭，我們需要水平翻轉畫布
+      if (currentFacingMode === 'user') {
+        ctx.save();
+        ctx.scale(-1, 1);
+        ctx.drawImage(cameraPreview, -canvas.width, 0, canvas.width, canvas.height);
+        ctx.restore();
+      } else {
+        ctx.drawImage(cameraPreview, 0, 0, canvas.width, canvas.height);
+      }
+
+      // 如果勾選了美肌模式，則套用濾鏡
+      if (beautifyCheckbox.checked) {
+        applyBeautifyFilter(ctx, canvas.width, canvas.height);
+      }
+
+      // 繪製邊框
+      ctx.drawImage(frameImage, 0, 0, canvas.width, canvas.height);
+
+      // 如果勾選了 "加入 Logo" 且有偵測到 Logo 位置，則繪製 Logo
+      if (addLogoCheckbox.checked && logoImage.complete && lastLogoPosition) {
+        // 由於 Canvas 繪製是基於 Canvas 自身的座標系，而 lastLogoPosition 是基於 video 元素的，
+        // 如果 video 和 canvas 的尺寸不同，需要進行比例調整。
+        // 在此範例中，video 和 canvas 寬高相同 (640x480)，所以可以直接使用。
+        ctx.drawImage(logoImage, lastLogoPosition.x, lastLogoPosition.y, lastLogoPosition.width, lastLogoPosition.height);
+      }
+
+      // 從畫布取得圖片資料，並設定為預覽圖片的來源
+      const imageDataURL = canvas.toDataURL('image/png');
+      previewImage.src = imageDataURL;
+
+      // 切換視圖
+      cameraContainer.style.display = 'none';
+      previewContainer.style.display = 'flex';
+    }
+
+    function savePicture() {
+      const imageDataURL = previewImage.src;
+      const downloadLink = document.createElement('a');
+      downloadLink.href = imageDataURL;
+      downloadLink.download = 'selfie.png';
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
+    }
+
+    function retakePicture() {
+      // 切換視圖回相機
+      previewContainer.style.display = 'none';
+      cameraContainer.style.display = 'flex';
+      if (faceModelsLoaded) {
+        startFaceDetection(); // 重新啟動人臉偵測
+      }
+    }
+
+    function switchCamera() {
+      stopFaceDetection(); // 切換鏡頭前停止人臉偵測
+      currentFacingMode = (currentFacingMode === 'user') ? 'environment' : 'user';
+      startCamera(currentFacingMode);
+    }
+
+    // 綁定事件
+    captureButton.addEventListener('click', takePicture);
+    saveButton.addEventListener('click', savePicture);
+    retakeButton.addEventListener('click', retakePicture);
+    switchCameraButton.addEventListener('click', switchCamera);
+    addLogoCheckbox.addEventListener('change', () => {
+      // 如果取消勾選 Logo，則隱藏動態 Logo
+      if (!addLogoCheckbox.checked) {
+        dynamicLogo.style.display = 'none';
+        lastLogoPosition = null;
+      }
+    });
+
+    // 初始啟動相機
+    startCamera(currentFacingMode);
+  </script>
+</body>
+</html>
