@@ -155,7 +155,7 @@
     let currentFacingMode = 'user';
     let faceModelsLoaded = false;
     let faceDetectionInterval;
-    let imageCapture = null;
+    let lastLogoPosition = null;
 
     async function loadFaceApiModels() {
       const MODEL_URL = '/weights';
@@ -173,8 +173,6 @@
       if (currentStream) {
         currentStream.getTracks().forEach(track => track.stop());
       }
-      imageCapture = null;
-
       try {
         const constraints = {
           video: {
@@ -187,18 +185,10 @@
         cameraPreview.srcObject = currentStream;
         await new Promise(resolve => cameraPreview.onloadedmetadata = resolve);
         
-        if ('ImageCapture' in window) {
-          const track = currentStream.getVideoTracks()[0];
-          imageCapture = new ImageCapture(track);
-          console.log('ImageCapture is supported and initialized.');
-        } else {
-          console.warn('ImageCapture is not supported. Falling back to canvas.drawImage().');
-        }
-
         cameraPreview.style.transform = (facingMode === 'user') ? 'scaleX(-1)' : 'scaleX(1)';
 
         if (!faceModelsLoaded) await loadFaceApiModels();
-        if (faceModelsLoaded) startPreviewFaceDetection();
+        if (faceModelsLoaded) startFaceDetection();
 
       } catch (error) {
         console.error('無法取得相機存取權:', error);
@@ -206,13 +196,13 @@
       }
     }
 
-    // 重新命名以區分：這只用於「預覽」
-    function startPreviewFaceDetection() {
+    function startFaceDetection() {
       if (faceDetectionInterval) clearInterval(faceDetectionInterval);
       
       faceDetectionInterval = setInterval(async () => {
         if (!faceModelsLoaded || !cameraPreview.srcObject || !addLogoCheckbox.checked) {
           dynamicLogo.style.display = 'none';
+          lastLogoPosition = null;
           return;
         }
 
@@ -220,20 +210,28 @@
         
         if (detections.length > 0) {
           const face = detections[0].box;
+          
           const videoWidth = cameraPreview.videoWidth;
           const videoHeight = cameraPreview.videoHeight;
           const viewWidth = cameraPreview.offsetWidth;
           const viewHeight = cameraPreview.offsetHeight;
-          const scale = Math.max(viewWidth / videoWidth, viewHeight / videoHeight);
+
+          const scaleX = viewWidth / videoWidth;
+          const scaleY = viewHeight / videoHeight;
+          const scale = Math.max(scaleX, scaleY);
+
           const offsetX = (viewWidth - videoWidth * scale) / 2;
           const offsetY = (viewHeight - videoHeight * scale) / 2;
+
           const viewFaceX = face.x * scale + offsetX;
           const viewFaceY = face.y * scale + offsetY;
           const viewFaceWidth = face.width * scale;
+
           const logoWidth = viewFaceWidth * 0.5;
           const logoHeight = logoImage.naturalHeight * (logoWidth / logoImage.naturalWidth);
           let logoX = viewFaceX + (viewFaceWidth / 2) - (logoWidth / 2) - 80;
           let logoY = viewFaceY - logoHeight - 30;
+
           logoX = Math.max(0, Math.min(viewWidth - logoWidth, logoX));
           logoY = Math.max(0, Math.min(viewHeight - logoHeight, logoY));
 
@@ -242,126 +240,121 @@
           dynamicLogo.style.width = `${logoWidth}px`;
           dynamicLogo.style.height = `${logoHeight}px`;
           dynamicLogo.style.display = 'block';
+
+          lastLogoPosition = {
+            x: (logoX - offsetX) / scale,
+            y: (logoY - offsetY) / scale,
+            width: logoWidth / scale,
+            height: logoHeight / scale
+          };
         } else {
           dynamicLogo.style.display = 'none';
+          lastLogoPosition = null;
         }
       }, 200);
     }
 
-    function stopPreviewFaceDetection() {
+    function stopFaceDetection() {
       if (faceDetectionInterval) clearInterval(faceDetectionInterval);
       dynamicLogo.style.display = 'none';
     }
 
-    async function takePicture() {
-      if (!currentStream) {
-        alert('相機尚未準備好。');
+    // ===== 核心修改：重構 takePicture 函式 =====
+    function takePicture() {
+      if (!cameraPreview.srcObject || !frameImage.complete) {
+        alert('相機或邊框尚未準備好，請稍候再試。');
         return;
       }
-      stopPreviewFaceDetection();
-      captureButton.disabled = true;
+      
+      stopFaceDetection();
 
-      try {
-        let imageBlob;
-        if (imageCapture) {
-          imageBlob = await imageCapture.takePhoto();
-        } else {
-          canvas.width = cameraPreview.videoWidth;
-          canvas.height = cameraPreview.videoHeight;
-          ctx.drawImage(cameraPreview, 0, 0);
-          imageBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
-        }
-        await composeFinalImage(imageBlob);
-      } catch (error) {
-        console.error('拍照失敗:', error);
-        alert('拍照失敗，請再試一次。');
-      } finally {
-        captureButton.disabled = false;
-      }
-    }
-
-    // ===== 核心修改：在合成階段重新進行人臉偵測 =====
-    async function composeFinalImage(imageBlob) {
-      const capturedBmp = await createImageBitmap(imageBlob);
+      // --- 關鍵步驟：在拍照當下，重新獲取最準確的尺寸 ---
+      const videoWidth = cameraPreview.videoWidth;
+      const videoHeight = cameraPreview.videoHeight;
       const containerWidth = cameraPreview.offsetWidth;
       const containerHeight = cameraPreview.offsetHeight;
-      const { sx, sy, sWidth, sHeight } = calculateCoverCrop(capturedBmp.width, capturedBmp.height, containerWidth, containerHeight);
 
-      const outputWidth = 1080;
-      const outputHeight = outputWidth * (containerHeight / containerWidth);
+      // 1. 計算裁切參數
+      // 這個函式封裝了 object-fit: cover 的裁切邏輯
+      const { sx, sy, sWidth, sHeight } = calculateCoverCrop(videoWidth, videoHeight, containerWidth, containerHeight);
+
+      // 2. 設定 Canvas 尺寸以匹配最終輸出比例，並獲取高畫質
+      const outputWidth = 1080; // 設定一個理想的輸出寬度
+      const outputHeight = outputWidth * (containerHeight / containerWidth); // 根據容器比例計算高度
       canvas.width = outputWidth;
       canvas.height = outputHeight;
 
-      drawFlippedAndCroppedImage(ctx, capturedBmp, sx, sy, sWidth, sHeight);
+      // 3. 繪製主畫面 (包含裁切和翻轉)
+      drawFlippedAndCroppedVideo(ctx, cameraPreview, sx, sy, sWidth, sHeight);
 
+      // 4. 繪製附加元素
       if (beautifyCheckbox.checked) {
         applyBeautifyFilter(ctx);
       }
+      
       ctx.drawImage(frameImage, 0, 0, canvas.width, canvas.height);
 
-      // --- 關鍵步驟：在最終畫布上繪製 Logo 前，重新偵測 ---
-      if (addLogoCheckbox.checked && logoImage.complete && faceModelsLoaded) {
-        console.log('Detecting face on the final high-res image...');
-        // 在裁切後的影像上進行偵測，以獲得最精準的相對位置
-        const finalDetections = await faceapi.detectAllFaces(capturedBmp, new faceapi.TinyFaceDetectorOptions());
-        
-        if (finalDetections.length > 0) {
-          const face = finalDetections[0].box;
-          // 此處的 face.x, face.y 等座標是相對於 capturedBmp (高解析度照片) 的
-          drawLogoOnCanvas(ctx, logoImage, face, { sx, sy, sWidth });
-        } else {
-          console.warn('No face detected on the final image, logo will not be added.');
-        }
+      if (addLogoCheckbox.checked && logoImage.complete && lastLogoPosition) {
+        drawLogoOnCanvas(ctx, logoImage, lastLogoPosition, { sx, sy, sWidth });
       }
 
+      // 5. 顯示結果
       previewImage.src = canvas.toDataURL('image/jpeg', 0.9);
       cameraContainer.style.display = 'none';
       previewContainer.style.display = 'flex';
     }
 
+    // ===== 新增的輔助函式，讓邏輯更清晰 =====
+
+    /**
+     * 計算模擬 object-fit: cover 效果所需的裁切參數
+     * @returns {object} { sx, sy, sWidth, sHeight }
+     */
     function calculateCoverCrop(srcWidth, srcHeight, containerWidth, containerHeight) {
       const srcAspect = srcWidth / srcHeight;
       const containerAspect = containerWidth / containerHeight;
       let sx = 0, sy = 0, sWidth = srcWidth, sHeight = srcHeight;
-      if (containerAspect < srcAspect) {
+
+      if (containerAspect < srcAspect) { // 容器比影像更「瘦高」，左右裁切
         sWidth = srcHeight * containerAspect;
         sx = (srcWidth - sWidth) / 2;
-      } else if (containerAspect > srcAspect) {
+      } else if (containerAspect > srcAspect) { // 容器比影像更「矮胖」，上下裁切
         sHeight = srcWidth / containerAspect;
         sy = (srcHeight - sHeight) / 2;
       }
       return { sx, sy, sWidth, sHeight };
     }
 
-    function drawFlippedAndCroppedImage(context, image, sx, sy, sWidth, sHeight) {
+    /**
+     * 繪製經過裁切和（根據需要）水平翻轉的影像
+     */
+    function drawFlippedAndCroppedVideo(context, video, sx, sy, sWidth, sHeight) {
       context.clearRect(0, 0, context.canvas.width, context.canvas.height);
+      
       if (currentFacingMode === 'user') {
         context.save();
         context.scale(-1, 1);
         context.translate(-context.canvas.width, 0);
       }
-      context.drawImage(image, sx, sy, sWidth, sHeight, 0, 0, context.canvas.width, context.canvas.height);
+
+      context.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, context.canvas.width, context.canvas.height);
+
       if (currentFacingMode === 'user') {
         context.restore();
       }
     }
-    
-    // ===== 核心修改：drawLogoOnCanvas 現在接收原始人臉偵測框 =====
-    function drawLogoOnCanvas(context, logo, faceBox, cropInfo) {
-      const { sx, sy, sWidth } = cropInfo;
+
+    /**
+     * 在 Canvas 上繪製 Logo
+     */
+    function drawLogoOnCanvas(context, logo, logoPos, cropInfo) {
+      const { sx, sWidth } = cropInfo;
       const drawScale = context.canvas.width / sWidth;
-
-      // 計算 Logo 在原始高解析度照片中的位置
-      const logoWidthOrig = faceBox.width * 0.5;
-      const logoHeightOrig = logo.naturalHeight * (logoWidthOrig / logo.naturalWidth);
-      const logoXOrig = faceBox.x + (faceBox.width / 2) - (logoWidthOrig / 2) - 80;
-      const logoYOrig = faceBox.y - logoHeightOrig - 30;
-
-      // 將原始照片中的 Logo 座標，轉換到最終裁切後的 Canvas 座標系統
-      const logoDrawX = (logoXOrig - sx) * drawScale;
-      const logoDrawY = (logoYOrig - sy) * drawScale;
-      const logoDrawWidth = logoWidthOrig * drawScale;
-      const logoDrawHeight = logoHeightOrig * drawScale;
+      
+      const logoDrawX = (logoPos.x - sx) * drawScale;
+      const logoDrawY = (logoPos.y - cropInfo.sy) * drawScale;
+      const logoDrawWidth = logoPos.width * drawScale;
+      const logoDrawHeight = logoPos.height * drawScale;
       
       if (currentFacingMode === 'user') {
         const finalLogoX = context.canvas.width - logoDrawX - logoDrawWidth;
@@ -371,6 +364,9 @@
       }
     }
 
+    /**
+     * 套用美肌濾鏡
+     */
     function applyBeautifyFilter(context) {
         const { width, height } = context.canvas;
         const tempCanvas = document.createElement('canvas');
@@ -378,13 +374,19 @@
         tempCanvas.width = width;
         tempCanvas.height = height;
         tempCtx.drawImage(context.canvas, 0, 0);
+
         context.filter = 'brightness(1.05) contrast(1.05) saturate(1.1)';
         context.drawImage(tempCanvas, 0, 0);
         context.filter = 'none';
     }
 
+    // ===== 事件處理與初始化函式 (保持不變) =====
+
     function savePicture() {
       const imageDataURL = previewImage.src;
+      console.log('準備上傳圖片，Base64 資料長度:', imageDataURL.length);
+      alert('圖片已儲存（請查看主控台）。實際應用中，這裡會是上傳邏輯。');
+      
       const downloadLink = document.createElement('a');
       downloadLink.href = imageDataURL;
       downloadLink.download = `selfie-${Date.now()}.jpg`;
@@ -395,12 +397,12 @@
       previewContainer.style.display = 'none';
       cameraContainer.style.display = 'flex';
       if (faceModelsLoaded) {
-        startPreviewFaceDetection();
+        startFaceDetection();
       }
     }
 
     function switchCamera() {
-      stopPreviewFaceDetection();
+      stopFaceDetection();
       currentFacingMode = (currentFacingMode === 'user') ? 'environment' : 'user';
       startCamera(currentFacingMode);
     }
@@ -412,6 +414,7 @@
     addLogoCheckbox.addEventListener('change', () => {
       if (!addLogoCheckbox.checked) {
         dynamicLogo.style.display = 'none';
+        lastLogoPosition = null;
       }
     });
 
