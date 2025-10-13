@@ -370,7 +370,24 @@
       downloadLink.href = imageDataURL;
       downloadLink.download = `selfie-${Date.now()}.jpg`;
       downloadLink.click();
+
+      // 禁用所有按鈕，防止使用者重複操作
+      saveButton.disabled = true;
+      retakeButton.disabled = true;
+      saveButton.textContent = '儲存中...';
+
+      // 提醒：請將下方的網址替換成您自己的問卷連結
+      const formUrl = 'https://forms.office.com/e/sRTLgvSiyy'; 
+      
+      console.log(`照片已儲存，1秒後將重新導向至: ${formUrl}`);
+      alert('照片已儲存！即將前往問卷頁面...');
+
+      // 延遲 1 秒後執行跳轉
+      setTimeout(() => {
+        window.location.href = formUrl;
+      }, 1000); // 1000 毫秒 = 1 秒
     }
+
 
     function retakePicture() {
       previewContainer.style.display = 'none';
