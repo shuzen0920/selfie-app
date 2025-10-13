@@ -269,7 +269,16 @@
       canvas.width = outputWidth;
       canvas.height = outputHeight;
 
-      drawFlippedAndCroppedVideo(ctx, cameraPreview, cropInfo.sx, cropInfo.sy, cropInfo.sWidth, cropInfo.sHeight);
+      // ===== 核心修改 1：在繪製所有內容前，先設定好畫布狀態 =====
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (currentFacingMode === 'user') {
+        ctx.save();
+        ctx.scale(-1, 1);
+        ctx.translate(-canvas.width, 0);
+      }
+
+      // 現在在可能已被翻轉的畫布上繪製所有內容
+      ctx.drawImage(cameraPreview, cropInfo.sx, cropInfo.sy, cropInfo.sWidth, cropInfo.sHeight, 0, 0, canvas.width, canvas.height);
 
       if (beautifyCheckbox.checked) {
         applyBeautifyFilter(ctx);
@@ -278,8 +287,12 @@
       ctx.drawImage(frameImage, 0, 0, canvas.width, canvas.height);
 
       if (logoRect && previewRect) {
-        // ===== 關鍵修改：將 cropInfo 傳入以進行校準 =====
-        drawLogoOnCanvas(ctx, logoImage, logoRect, previewRect, cropInfo);
+        drawLogoOnCanvas(ctx, logoImage, logoRect, previewRect);
+      }
+
+      // ===== 核心修改 2：在所有繪製完成後，才恢復畫布狀態 =====
+      if (currentFacingMode === 'user') {
+        ctx.restore();
       }
 
       previewImage.src = canvas.toDataURL('image/jpeg', 0.9);
@@ -301,22 +314,13 @@
       return { sx, sy, sWidth, sHeight };
     }
 
+    // 這個函式現在不再需要關心翻轉
     function drawFlippedAndCroppedVideo(context, video, sx, sy, sWidth, sHeight) {
-      context.clearRect(0, 0, context.canvas.width, context.canvas.height);
-      if (currentFacingMode === 'user') {
-        context.save();
-        context.scale(-1, 1);
-        context.translate(-context.canvas.width, 0);
-      }
-      context.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, context.canvas.width, context.canvas.height);
-      if (currentFacingMode === 'user') {
-        context.restore();
-      }
+      // 此函式內容已合併到 takePicture 中，可以安全移除或留空
     }
     
-    // ===== 核心修改：drawLogoOnCanvas 的全新終極邏輯 =====
-    function drawLogoOnCanvas(context, logo, logoRect, previewRect, cropInfo) {
-      // 1. 計算在螢幕上，影像內容相對於 <video> 容器的縮放和偏移
+    // ===== 核心修改 3：drawLogoOnCanvas 完全移除翻轉邏輯 =====
+    function drawLogoOnCanvas(context, logo, logoRect, previewRect) {
       const videoWidth = cameraPreview.videoWidth;
       const videoHeight = cameraPreview.videoHeight;
       const viewWidth = previewRect.width;
@@ -328,49 +332,46 @@
       const contentWidth = videoWidth * scale;
       const contentHeight = videoHeight * scale;
 
-      // 2. 獲取 Logo 相對於 <video> 容器左上角的像素位置
       const logoXInContainer = logoRect.left - previewRect.left;
       const logoYInContainer = logoRect.top - previewRect.top;
 
-      // 3. 將 Logo 的容器座標，轉換為相對於「可見影像內容」的百分比座標
-      // 這是解決 object-fit: cover 錯位的關鍵！
       const relativeX = (logoXInContainer - contentOffsetX) / contentWidth;
       const relativeY = (logoYInContainer - contentOffsetY) / contentHeight;
       const relativeWidth = logoRect.width / contentWidth;
       const relativeHeight = logoRect.height / contentHeight;
 
-      // 4. 檢查 Logo 是否在可見影像內容內，如果不是則不繪製
       if (relativeX < 0 || relativeX > 1 || relativeY < 0 || relativeY > 1) {
-        console.warn("Logo is outside the visible video content area. Not drawing.");
         return;
       }
 
-      // 5. 將這些「內容相對百分比」應用到最終的 Canvas 上
-      // 因為 Canvas 的內容就是裁切後的影像內容，所以百分比可以直接應用
       const logoDrawX = context.canvas.width * relativeX;
       const logoDrawY = context.canvas.height * relativeY;
       const logoDrawWidth = context.canvas.width * relativeWidth;
       const logoDrawHeight = context.canvas.height * relativeHeight;
       
-      // 6. 繪製 Logo（並處理前鏡頭翻轉）
-      if (currentFacingMode === 'user') {
-        const finalFlippedLogoX = context.canvas.width - logoDrawX - logoDrawWidth;
-        context.drawImage(logo, finalFlippedLogoX, logoDrawY, logoDrawWidth, logoDrawHeight);
-      } else {
-        context.drawImage(logo, logoDrawX, logoDrawY, logoDrawWidth, logoDrawHeight);
-      }
+      // 直接繪製，不再有 if (currentFacingMode === 'user') 的判斷
+      context.drawImage(logo, logoDrawX, logoDrawY, logoDrawWidth, logoDrawHeight);
     }
 
     function applyBeautifyFilter(context) {
         const { width, height } = context.canvas;
+        // 因為畫布可能被翻轉，我們需要在一个臨時的、未翻轉的畫布上操作
         const tempCanvas = document.createElement('canvas');
         const tempCtx = tempCanvas.getContext('2d');
         tempCanvas.width = width;
         tempCanvas.height = height;
+        
+        // 將當前（可能已翻轉）的畫布內容繪製到臨時畫布上
         tempCtx.drawImage(context.canvas, 0, 0);
-        context.filter = 'brightness(1.05) contrast(1.05) saturate(1.1)';
+
+        // 在臨時畫布上套用濾鏡
+        tempCtx.filter = 'brightness(1.05) contrast(1.05) saturate(1.1)';
+        tempCtx.drawImage(tempCanvas, 0, 0);
+        tempCtx.filter = 'none';
+
+        // 將處理好的結果繪製回原始畫布
+        context.clearRect(0, 0, width, height);
         context.drawImage(tempCanvas, 0, 0);
-        context.filter = 'none';
     }
 
     function savePicture() {
