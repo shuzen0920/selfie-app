@@ -241,14 +241,12 @@
       dynamicLogo.style.display = 'none';
     }
 
-    // ===== 核心修改：重構 takePicture 函式 =====
     function takePicture() {
       if (!cameraPreview.srcObject || !frameImage.complete) {
         alert('相機或邊框尚未準備好，請稍候再試。');
         return;
       }
       
-      // ===== 關鍵步驟 1：在停止偵測前，先測量 Logo 的位置 =====
       let logoRect = null;
       let previewRect = null;
       const logoStyle = window.getComputedStyle(dynamicLogo);
@@ -257,7 +255,6 @@
         previewRect = cameraPreview.getBoundingClientRect();
       }
 
-      // ===== 關鍵步驟 2：現在才停止偵測並隱藏 Logo =====
       stopFaceDetection();
 
       const videoWidth = cameraPreview.videoWidth;
@@ -265,14 +262,14 @@
       const containerWidth = cameraPreview.offsetWidth;
       const containerHeight = cameraPreview.offsetHeight;
 
-      const { sx, sy, sWidth, sHeight } = calculateCoverCrop(videoWidth, videoHeight, containerWidth, containerHeight);
+      const cropInfo = calculateCoverCrop(videoWidth, videoHeight, containerWidth, containerHeight);
 
       const outputWidth = 1080;
       const outputHeight = outputWidth * (containerHeight / containerWidth);
       canvas.width = outputWidth;
       canvas.height = outputHeight;
 
-      drawFlippedAndCroppedVideo(ctx, cameraPreview, sx, sy, sWidth, sHeight);
+      drawFlippedAndCroppedVideo(ctx, cameraPreview, cropInfo.sx, cropInfo.sy, cropInfo.sWidth, cropInfo.sHeight);
 
       if (beautifyCheckbox.checked) {
         applyBeautifyFilter(ctx);
@@ -280,9 +277,9 @@
       
       ctx.drawImage(frameImage, 0, 0, canvas.width, canvas.height);
 
-      // ===== 關鍵步驟 3：如果測量到了位置，就繪製 Logo =====
       if (logoRect && previewRect) {
-        drawLogoOnCanvas(ctx, logoImage, logoRect, previewRect);
+        // ===== 關鍵修改：將 cropInfo 傳入以進行校準 =====
+        drawLogoOnCanvas(ctx, logoImage, logoRect, previewRect, cropInfo);
       }
 
       previewImage.src = canvas.toDataURL('image/jpeg', 0.9);
@@ -317,21 +314,45 @@
       }
     }
     
-    // ===== 核心修改：drawLogoOnCanvas 的參數和邏輯更新 =====
-    function drawLogoOnCanvas(context, logo, logoRect, previewRect) {
-      // 1. 計算 Logo 相對於預覽框的「百分比」位置和尺寸
-      const relativeX = (logoRect.left - previewRect.left) / previewRect.width;
-      const relativeY = (logoRect.top - previewRect.top) / previewRect.height;
-      const relativeWidth = logoRect.width / previewRect.width;
-      const relativeHeight = logoRect.height / previewRect.height;
+    // ===== 核心修改：drawLogoOnCanvas 的全新終極邏輯 =====
+    function drawLogoOnCanvas(context, logo, logoRect, previewRect, cropInfo) {
+      // 1. 計算在螢幕上，影像內容相對於 <video> 容器的縮放和偏移
+      const videoWidth = cameraPreview.videoWidth;
+      const videoHeight = cameraPreview.videoHeight;
+      const viewWidth = previewRect.width;
+      const viewHeight = previewRect.height;
+      
+      const scale = Math.max(viewWidth / videoWidth, viewHeight / videoHeight);
+      const contentOffsetX = (viewWidth - videoWidth * scale) / 2;
+      const contentOffsetY = (viewHeight - videoHeight * scale) / 2;
+      const contentWidth = videoWidth * scale;
+      const contentHeight = videoHeight * scale;
 
-      // 2. 將這些百分比應用到最終的 Canvas 上
+      // 2. 獲取 Logo 相對於 <video> 容器左上角的像素位置
+      const logoXInContainer = logoRect.left - previewRect.left;
+      const logoYInContainer = logoRect.top - previewRect.top;
+
+      // 3. 將 Logo 的容器座標，轉換為相對於「可見影像內容」的百分比座標
+      // 這是解決 object-fit: cover 錯位的關鍵！
+      const relativeX = (logoXInContainer - contentOffsetX) / contentWidth;
+      const relativeY = (logoYInContainer - contentOffsetY) / contentHeight;
+      const relativeWidth = logoRect.width / contentWidth;
+      const relativeHeight = logoRect.height / contentHeight;
+
+      // 4. 檢查 Logo 是否在可見影像內容內，如果不是則不繪製
+      if (relativeX < 0 || relativeX > 1 || relativeY < 0 || relativeY > 1) {
+        console.warn("Logo is outside the visible video content area. Not drawing.");
+        return;
+      }
+
+      // 5. 將這些「內容相對百分比」應用到最終的 Canvas 上
+      // 因為 Canvas 的內容就是裁切後的影像內容，所以百分比可以直接應用
       const logoDrawX = context.canvas.width * relativeX;
       const logoDrawY = context.canvas.height * relativeY;
       const logoDrawWidth = context.canvas.width * relativeWidth;
       const logoDrawHeight = context.canvas.height * relativeHeight;
       
-      // 3. 繪製 Logo（並處理前鏡頭翻轉）
+      // 6. 繪製 Logo（並處理前鏡頭翻轉）
       if (currentFacingMode === 'user') {
         const finalFlippedLogoX = context.canvas.width - logoDrawX - logoDrawWidth;
         context.drawImage(logo, finalFlippedLogoX, logoDrawY, logoDrawWidth, logoDrawHeight);
