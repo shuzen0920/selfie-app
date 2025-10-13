@@ -155,9 +155,8 @@
     let currentFacingMode = 'user';
     let faceModelsLoaded = false;
     let faceDetectionInterval;
-    let lastLogoPosition = null;
-    // ===== 新增：儲存預覽時的影像尺寸 =====
-    let previewVideoDimensions = { width: 0, height: 0 };
+    // 不再需要 lastLogoPosition，因為我們將在拍照時直接測量
+    // let lastLogoPosition = null; 
 
     async function loadFaceApiModels() {
       const MODEL_URL = '/weights';
@@ -198,13 +197,13 @@
       }
     }
 
+    // 這個函式現在只負責在螢幕上顯示動態 Logo，不再儲存任何座標
     function startFaceDetection() {
       if (faceDetectionInterval) clearInterval(faceDetectionInterval);
       
       faceDetectionInterval = setInterval(async () => {
         if (!faceModelsLoaded || !cameraPreview.srcObject || !addLogoCheckbox.checked) {
           dynamicLogo.style.display = 'none';
-          lastLogoPosition = null;
           return;
         }
 
@@ -212,29 +211,20 @@
         
         if (detections.length > 0) {
           const face = detections[0].box;
-          
           const videoWidth = cameraPreview.videoWidth;
           const videoHeight = cameraPreview.videoHeight;
           const viewWidth = cameraPreview.offsetWidth;
           const viewHeight = cameraPreview.offsetHeight;
-
-          // ===== 關鍵修改 1：儲存當前用於偵測的影像尺寸 =====
-          previewVideoDimensions.width = videoWidth;
-          previewVideoDimensions.height = videoHeight;
-
           const scale = Math.max(viewWidth / videoWidth, viewHeight / videoHeight);
           const offsetX = (viewWidth - videoWidth * scale) / 2;
           const offsetY = (viewHeight - videoHeight * scale) / 2;
-
           const viewFaceX = face.x * scale + offsetX;
           const viewFaceY = face.y * scale + offsetY;
           const viewFaceWidth = face.width * scale;
-
           const logoWidth = viewFaceWidth * 0.5;
           const logoHeight = logoImage.naturalHeight * (logoWidth / logoImage.naturalWidth);
           let logoX = viewFaceX + (viewFaceWidth / 2) - (logoWidth / 2) - 80;
           let logoY = viewFaceY - logoHeight - 30;
-
           logoX = Math.max(0, Math.min(viewWidth - logoWidth, logoX));
           logoY = Math.max(0, Math.min(viewHeight - logoHeight, logoY));
 
@@ -243,17 +233,8 @@
           dynamicLogo.style.width = `${logoWidth}px`;
           dynamicLogo.style.height = `${logoHeight}px`;
           dynamicLogo.style.display = 'block';
-
-          // lastLogoPosition 現在儲存的是相對於「預覽時」影像的座標
-          lastLogoPosition = {
-            x: (logoX - offsetX) / scale,
-            y: (logoY - offsetY) / scale,
-            width: logoWidth / scale,
-            height: logoHeight / scale
-          };
         } else {
           dynamicLogo.style.display = 'none';
-          lastLogoPosition = null;
         }
       }, 200);
     }
@@ -263,6 +244,7 @@
       dynamicLogo.style.display = 'none';
     }
 
+    // ===== 核心修改：重構 takePicture 函式 =====
     function takePicture() {
       if (!cameraPreview.srcObject || !frameImage.complete) {
         alert('相機或邊框尚未準備好，請稍候再試。');
@@ -291,9 +273,13 @@
       
       ctx.drawImage(frameImage, 0, 0, canvas.width, canvas.height);
 
-      if (addLogoCheckbox.checked && logoImage.complete && lastLogoPosition) {
-        // ===== 關鍵修改 2：將預覽時的尺寸傳入，進行校準 =====
-        drawLogoOnCanvas(ctx, logoImage, lastLogoPosition, { sx, sy, sWidth }, previewVideoDimensions);
+      // ===== 關鍵步驟：在拍照後，直接測量螢幕上的 Logo 位置 =====
+      if (addLogoCheckbox.checked && logoImage.complete) {
+        // 檢查 dynamicLogo 是否可見
+        const logoStyle = window.getComputedStyle(dynamicLogo);
+        if (logoStyle.display !== 'none') {
+          drawLogoOnCanvas(ctx, logoImage);
+        }
       }
 
       previewImage.src = canvas.toDataURL('image/jpeg', 0.9);
@@ -305,7 +291,6 @@
       const srcAspect = srcWidth / srcHeight;
       const containerAspect = containerWidth / containerHeight;
       let sx = 0, sy = 0, sWidth = srcWidth, sHeight = srcHeight;
-
       if (containerAspect < srcAspect) {
         sWidth = srcHeight * containerAspect;
         sx = (srcWidth - sWidth) / 2;
@@ -318,54 +303,39 @@
 
     function drawFlippedAndCroppedVideo(context, video, sx, sy, sWidth, sHeight) {
       context.clearRect(0, 0, context.canvas.width, context.canvas.height);
-      
       if (currentFacingMode === 'user') {
         context.save();
         context.scale(-1, 1);
         context.translate(-context.canvas.width, 0);
       }
-
       context.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, context.canvas.width, context.canvas.height);
-
       if (currentFacingMode === 'user') {
         context.restore();
       }
     }
 
-    // ===== 核心修改：drawLogoOnCanvas 現在接收預覽時的尺寸進行校準 =====
-    function drawLogoOnCanvas(context, logo, logoPos, cropInfo, previewDimensions) {
-      // 如果沒有預覽尺寸資訊，則無法校準，直接返回
-      if (!previewDimensions || previewDimensions.width === 0) {
-        console.warn("無法獲取預覽時的影像尺寸，Logo 位置可能不準確。");
-        return;
-      }
+    // ===== 核心修改：drawLogoOnCanvas 的全新邏輯 =====
+    function drawLogoOnCanvas(context, logo) {
+      // 1. 直接從 DOM 獲取 Logo 在螢幕上的視覺尺寸和位置
+      const logoRect = dynamicLogo.getBoundingClientRect();
+      const previewRect = cameraPreview.getBoundingClientRect();
 
-      // 1. 獲取拍照時的影像尺寸（裁切後的寬度）和最終畫布尺寸
-      const captureCropWidth = cropInfo.sWidth;
-      const finalCanvasWidth = context.canvas.width;
+      // 2. 計算 Logo 相對於預覽框的「百分比」位置和尺寸
+      const relativeX = (logoRect.left - previewRect.left) / previewRect.width;
+      const relativeY = (logoRect.top - previewRect.top) / previewRect.height;
+      const relativeWidth = logoRect.width / previewRect.width;
+      const relativeHeight = logoRect.height / previewRect.height;
 
-      // 2. 計算從「預覽影像」到「拍照影像」的尺寸校準比例
-      // 這是解決 Zoom Out 問題的關鍵！
-      const calibrationScale = captureCropWidth / (previewDimensions.width * (captureCropWidth / cameraPreview.videoWidth));
-
-      // 3. 將儲存的 logoPos（基於預覽影像）進行校準，得到它在「拍照影像」中的對應位置
-      const calibratedLogoX = logoPos.x * calibrationScale;
-      const calibratedLogoY = logoPos.y * calibrationScale;
-      const calibratedLogoWidth = logoPos.width * calibrationScale;
-      const calibratedLogoHeight = logoPos.height * calibrationScale;
-
-      // 4. 計算從「拍照影像的裁切區域」到「最終畫布」的繪製縮放比例
-      const drawScale = finalCanvasWidth / captureCropWidth;
-
-      // 5. 將校準後的 Logo 座標，轉換到最終畫布上
-      const logoDrawX = (calibratedLogoX - cropInfo.sx) * drawScale;
-      const logoDrawY = (calibratedLogoY - cropInfo.sy) * drawScale;
-      const logoDrawWidth = calibratedLogoWidth * drawScale;
-      const logoDrawHeight = calibratedLogoHeight * drawScale;
+      // 3. 將這些百分比應用到最終的 Canvas 上
+      const logoDrawX = context.canvas.width * relativeX;
+      const logoDrawY = context.canvas.height * relativeY;
+      const logoDrawWidth = context.canvas.width * relativeWidth;
+      const logoDrawHeight = context.canvas.height * relativeHeight;
       
-      // 6. 繪製 Logo（並處理前鏡頭翻轉）
+      // 4. 繪製 Logo（並處理前鏡頭翻轉）
       if (currentFacingMode === 'user') {
-        const finalFlippedLogoX = finalCanvasWidth - logoDrawX - logoDrawWidth;
+        // 如果是前鏡頭，整個畫布是翻轉的，所以 Logo 的 X 座標也要翻轉
+        const finalFlippedLogoX = context.canvas.width - logoDrawX - logoDrawWidth;
         context.drawImage(logo, finalFlippedLogoX, logoDrawY, logoDrawWidth, logoDrawHeight);
       } else {
         context.drawImage(logo, logoDrawX, logoDrawY, logoDrawWidth, logoDrawHeight);
@@ -379,7 +349,6 @@
         tempCanvas.width = width;
         tempCanvas.height = height;
         tempCtx.drawImage(context.canvas, 0, 0);
-
         context.filter = 'brightness(1.05) contrast(1.05) saturate(1.1)';
         context.drawImage(tempCanvas, 0, 0);
         context.filter = 'none';
@@ -414,7 +383,6 @@
     addLogoCheckbox.addEventListener('change', () => {
       if (!addLogoCheckbox.checked) {
         dynamicLogo.style.display = 'none';
-        lastLogoPosition = null;
       }
     });
 
